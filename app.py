@@ -74,17 +74,32 @@ with st.sidebar:
     with col_b:
         ma_slow = st.number_input("慢均線",   min_value=50,  max_value=500,  value=200, step=10)
         period  = st.selectbox("資料期間", ["1y", "2y", "3y"], index=1)
+
+     # ★ 極速框計算週期選擇器
+    tf_display = st.selectbox(
+        "⚙️ 極速框計算週期",
+        ["1D（日線）", "3D（三日線）", "1W（週線）"],
+        index=0,
+        help="選擇用哪個週期的 T-1 高低點來計算極速框目標位與 TP1~TP3"
+    )
+    tf_map     = {"1D（日線）": "1D", "3D（三日線）": "3D", "1W（週線）": "1W"}
+    timeframe  = tf_map[tf_display]
     st.divider()
     scan_btn = st.button("🔍 開始掃描", type="primary", use_container_width=True)
     st.caption("每檔約 2–5 秒，掃描期間請耐心等候。")
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def cached_analyze(ticker, period, ma_fast, ma_slow, sb_ratio):
+def cached_analyze(ticker, period, ma_fast, ma_slow, sb_ratio, timeframe):
     data = get_all_timeframes(ticker, period)
-    df   = run_strategy(data["daily"], data["weekly"], ma_fast, ma_slow, sb_ratio, data["3d"] )
+    df, _trade_log = run_strategy(          # ★ 解包 tuple
+        data["daily"], data["weekly"],
+        ma_fast, ma_slow, sb_ratio,
+        data["3d"],
+        timeframe,
+    )
     summ = get_today_summary(df, data["ticker"])
-    return df, summ
+    return df, summ                          # trade_log 回測頁面自己另外呼叫
 
 
 if scan_btn:
@@ -98,7 +113,7 @@ if scan_btn:
         for i, raw_ticker in enumerate(watchlist):
             prog.progress((i+1)/len(watchlist), text=f"分析 {raw_ticker}…")
             try:
-                df, summ = cached_analyze(raw_ticker, period, ma_fast, ma_slow, sb_ratio)
+                df, summ = cached_analyze(raw_ticker, period, ma_fast, ma_slow, sb_ratio, timeframe)  # ★
                 results[summ["ticker"]] = {"df": df, "summary": summ}
             except Exception as e:
                 errors.append(f"❌ {raw_ticker}：{e}")
@@ -284,6 +299,19 @@ with tab_scan:
     else:
         st.info("目前篩選條件下無符合標的。")
 
+    # ★ 今日觸發進場的快訊文案（與 if rows 平齊，不在裡面）
+    alert_stocks = [s for s in summaries if s.get("alert_message", "")]
+    if alert_stocks:
+        st.markdown("---")
+        st.markdown("### 🚀 今日進場快訊（可一鍵複製）")
+        for s in alert_stocks:
+            ticker   = s["ticker"]
+            full_msg = f"[{ticker}] {s['alert_message']}"
+            st.markdown(f"**{ticker}**")
+            st.code(full_msg, language=None)
+    else:
+        st.info("目前篩選條件下無符合標的。")
+
 
 # ══ Tab 2：持倉管理 ══════════════════════════════════════════════════
 with tab_port:
@@ -359,7 +387,7 @@ with tab_port:
                 with st.spinner(f"正在拉取 {raw_t} 資料…"):
                     try:
                         data   = get_all_timeframes(raw_t, period)
-                        df_pos = run_strategy(
+                        df_pos, _ = run_strategy(    # ★ 解包，_ 忽略 trade_log
                             data["daily"], data["weekly"], ma_fast, ma_slow, sb_ratio
                         )
                         results[data["ticker"]] = {
